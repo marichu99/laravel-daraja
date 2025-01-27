@@ -4,7 +4,8 @@ namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
+use Exception;
+
 
 class MpesaService
 {
@@ -66,17 +67,20 @@ class MpesaService
 
     public function stkPushSimulation($phoneNumber, $amount)
     {
+        // Authenticate and get the access token
         $token = $this->authenticate();
         Log::channel('stderr')->info('Access Token:', ['token' => $token]);
 
+        // Define the STK Push URL
         $url = env('MPESA_API_URL') . '/mpesa/stkpush/v1/processrequest';
 
+        // Generate required parameters
         $shortcode = env('MPESA_BUSINESS_SHORTCODE');
         $passkey = env('MPESA_PASSKEY');
         $timestamp = now()->format('YmdHis');
-
         $password = $this->generatePassword($shortcode, $passkey, $timestamp);
 
+        // Send the STK Push request
         $response = Http::withHeaders([
             'Authorization' => 'Bearer ' . $token,
             'Content-Type' => 'application/json',
@@ -94,21 +98,82 @@ class MpesaService
                     'TransactionDesc' => 'Payment for services',
                 ]);
 
+        // Decode the response
+        $responseBody = $response->json();
+
+        // Log the response for debugging
+        Log::channel('stderr')->info('STK Push Response:', $responseBody);
+
+        // Extract the CheckoutRequestID from the response
+        $checkoutRequestID = $responseBody['CheckoutRequestID'] ?? null;
+
+        sleep(8);
+        if ($checkoutRequestID) {
+            // Call the path function recursively after 5 seconds
+            $this->callPathRecursively($checkoutRequestID, $token);
+        }
+
+        return $responseBody;
+    }
+
+    protected function callPathRecursively($checkoutRequestID, $token)
+    {
+        // Wait for 5 seconds before making the next request
+        sleep(3);
+
+        // Call the path function
+        $response = $this->path($checkoutRequestID, $token);
+
+        // Log the response for debugging
+        Log::channel('stderr')->info('STK Query Response:', $response);
+
+        // check if the transaction is underway
+        // If the transaction is not complete, call the function recursively
+
+        $errorCode = $response["errorCode"] ?? null;
+        if ($errorCode) {
+            $this->callPathRecursively($checkoutRequestID, $token);
+        }
+
+
+        // Check the ResultCode
+        $resultCode = $response['ResultCode'] ?? null;
+        $resultDesc = $response['ResultDesc'] ?? 'Unknown error';
+
+        if ($resultCode == '0') {
+            Log::channel('stderr')->info('Transaction completed successfully.');
+            return;
+        } else {
+            // Throw an exception with the ResultDesc as the error message
+            throw new Exception("Transaction failed: " . $resultDesc);
+        }
+
+
+    }
+
+    public function path($checkoutRequestID, $token)
+    {
+        // Define the STK Push Query URL
+        $url = env('MPESA_API_URL') . '/mpesa/stkpushquery/v1/query';
+
+        // Generate required parameters
+        $shortcode = env('MPESA_BUSINESS_SHORTCODE');
+        $passkey = env('MPESA_PASSKEY');
+        $timestamp = now()->format('YmdHis');
+        $password = $this->generatePassword($shortcode, $passkey, $timestamp);
+
+        // Send the STK Push Query request
+        $response = Http::withHeaders([
+            'Authorization' => 'Bearer ' . $token,
+            'Content-Type' => 'application/json',
+        ])->post($url, [
+                    'BusinessShortCode' => $shortcode,
+                    'Password' => $password,
+                    'Timestamp' => $timestamp,
+                    'CheckoutRequestID' => $checkoutRequestID,
+                ]);
+
         return $response->json();
     }
-    public function path()
-    {
-        try {
-        $data = file_get_contents('php://input');
-        // Log the POST data
-        Log::channel('stderr')->info('POST Data Received:', ['data' => $data]);
 
-        // Store the data in a file
-        Storage::disk('local')->put('stk.txt', $data);
-
-        return response()->json(['message' => 'Data received successfully.']);
-        } catch (\Exception $e) {
-            Log::channel('stderr')->info('Log to console!'. $e->getMessage());
-        }
-    }
 }

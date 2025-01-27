@@ -51,7 +51,7 @@ class MpesaController extends Controller
         } catch (\Exception $e) {
             Log::channel('stderr')->info('Log to console!'. $e->getMessage());
             // Handle any exception and provide feedback
-            return redirect('/')->withErrors(['msg' => 'An error occurred. Please try again later.']);
+            return redirect('/')->withErrors(['msg' => 'An error occurred: '. $e->getMessage()]);
         }
     }
 
